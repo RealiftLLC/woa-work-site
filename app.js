@@ -4,11 +4,16 @@
 
   /* ---------------------------------------------------------------
      LEAD FORM SETTINGS
-     Leave FORM_ENDPOINT empty and the form opens a pre-filled email
-     to LEAD_EMAIL. Paste a form endpoint (Formspree, Klaviyo, AWS
-     Lambda URL, etc.) to send submissions there instead.
+     Submissions go to Klaviyo as a "WOA for Work Call Request" event
+     on the visitor's profile. A Klaviyo flow triggered by that event
+     emails the team. KLAVIYO_SITE_ID is the account's PUBLIC site ID,
+     made for use in website code (never put a private key here).
+     If Klaviyo can't be reached, the form falls back to opening a
+     pre-filled email to LEAD_EMAIL.
      --------------------------------------------------------------- */
-  var FORM_ENDPOINT = "";
+  var KLAVIYO_SITE_ID = "XBCc5e";
+  var KLAVIYO_EVENT = "WOA for Work Call Request";
+  var KLAVIYO_REVISION = "2026-07-15";
   var LEAD_EMAIL = "ron@tailorstep.co";
   var PAIR_PRICE = 185;
   var EMPLOYER_SHARE = 0.25;
@@ -91,29 +96,81 @@
         return;
       }
 
-      if (FORM_ENDPOINT) {
-        status.textContent = "Sending…";
-        fetch(FORM_ENDPOINT, {
-          method: "POST",
-          headers: { "Accept": "application/json" },
-          body: data
-        }).then(function (res) {
-          if (!res.ok) throw new Error("HTTP " + res.status);
-          form.reset();
-          status.textContent = "Thanks. We'll be in touch within one business day to book your call.";
-        }).catch(function () {
-          status.textContent = "Something went wrong. Please email " + LEAD_EMAIL + " and we'll get back to you.";
-        });
-        return;
-      }
+      var lead = {
+        name: String(data.get("name") || "").trim(),
+        title: String(data.get("title") || "").trim(),
+        organization: String(data.get("organization") || "").trim(),
+        email: email,
+        employees: String(data.get("employees") || "").trim() || "Not given",
+        program: String(data.get("program") || "").trim() || "Not sure"
+      };
+      var parts = lead.name.split(/\s+/);
+      var firstName = parts.shift() || "";
+      var lastName = parts.join(" ");
+      var button = form.querySelector("button[type=submit]");
+      if (button) button.disabled = true;
+      status.textContent = "Sending…";
 
-      var lines = [];
-      data.forEach(function (v, k) { lines.push(k.charAt(0).toUpperCase() + k.slice(1) + ": " + v); });
-      var subject = "WOA for Work: call request from " + (data.get("organization") || "");
-      window.location.href = "mailto:" + LEAD_EMAIL +
-        "?subject=" + encodeURIComponent(subject) +
-        "&body=" + encodeURIComponent(lines.join("\n"));
-      status.textContent = "Your email app should open with your details filled in. Just press send.";
+      var payload = {
+        data: {
+          type: "event",
+          attributes: {
+            properties: {
+              Name: lead.name,
+              Title: lead.title,
+              Organization: lead.organization,
+              Email: lead.email,
+              Employees: lead.employees,
+              Program: lead.program,
+              Page: window.location.href
+            },
+            metric: { data: { type: "metric", attributes: { name: KLAVIYO_EVENT } } },
+            profile: {
+              data: {
+                type: "profile",
+                attributes: {
+                  email: lead.email,
+                  first_name: firstName,
+                  last_name: lastName,
+                  title: lead.title,
+                  organization: lead.organization,
+                  properties: {
+                    "B2B Lead": true,
+                    "B2B Employees On Their Feet": lead.employees,
+                    "B2B Program Of Interest": lead.program,
+                    "B2B Lead Source": "work.woashoes.com"
+                  }
+                }
+              }
+            }
+          }
+        }
+      };
+
+      fetch("https://a.klaviyo.com/client/events/?company_id=" + encodeURIComponent(KLAVIYO_SITE_ID), {
+        method: "POST",
+        headers: {
+          "Accept": "application/vnd.api+json",
+          "Content-Type": "application/vnd.api+json",
+          "revision": KLAVIYO_REVISION
+        },
+        body: JSON.stringify(payload)
+      }).then(function (res) {
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        form.reset();
+        status.textContent = "Thanks, " + (firstName || "we got it") + ". We'll be in touch within one business day to book your call.";
+      }).catch(function () {
+        var lines = [
+          "Name: " + lead.name, "Title: " + lead.title, "Organization: " + lead.organization,
+          "Work email: " + lead.email, "Employees on their feet: " + lead.employees, "Program of interest: " + lead.program
+        ];
+        window.location.href = "mailto:" + LEAD_EMAIL +
+          "?subject=" + encodeURIComponent("WOA for Work: call request from " + lead.organization) +
+          "&body=" + encodeURIComponent(lines.join("\n"));
+        status.textContent = "Your email app should open with your details filled in. Just press send.";
+      }).then(function () {
+        if (button) button.disabled = false;
+      });
     });
   }
 })();
